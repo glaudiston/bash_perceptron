@@ -1,76 +1,72 @@
 #!/bin/bash
 #
 # This is a linear one to one perceptron
-# Expect to predict a number, in this case multiply by 3
+# Expect to predict a number, in this case multiply by 3 + 20 (bias)
 declare -a inputs=( 1 2 3 4 5 );
-declare -a outputs=( 3 6 9 12 15 );
+declare -a outputs=( 23 26 29 32 35 );
 declare b=0;
-declare w=0.1;
+declare w=0;
 declare lr=0.1;
-declare epochs=50;
+declare epochs=5000;
+
+coproc BC { { echo "scale=8;";cat; } | bc -l; }
+
+calc(){
+	echo "$@" >&${BC[1]};
+	read V <&${BC[0]};
+	echo $V
+}
 
 predict(){
 	local x=$1;
 	local w=$2;
 	local b=$3;
-	echo "scale=8; $x * $w + $b" | bc;
+	calc "$x * $w + $b";
 }
 
 train(){
+	declare -a epoch_loss=( );
+	declare -a epoch_bias=( );
+	w_p=0;
+	w_pp=0;
+	b_p=0;
+	b_pp=0;
 	for epoch in $(seq $epochs); do
 		declare -a predictions=( );
 		declare -a loss=( );
+		declare -a sign_loss=( );
+		local lr_correction_sum=0;
+		local loss_sum=0;
+		local sign_loss_sum=0;
 		for (( i=0; i<${#inputs[@]}; i++)); do
 			predictions[$i]=$(predict "${inputs[$i]}" "$w" "$b");
-			loss[$i]=$(echo "scale=8; ${outputs[$i]} - ${predictions[$i]}" | bc);
+			loss[$i]=$(calc "${outputs[$i]} - ${predictions[$i]}");
+			sign_loss[$i]=$( [ "$(calc "${loss[$i]} < 0")" == "1" ] && echo -1 || echo 1 );
+			sign_loss_sum=$(calc "$sign_loss_sum + ${sign_loss[$i]}");
+			loss_sum=$(calc "$loss_sum + ${loss[$i]}");
+			lr_correction_sum=$(calc "$lr_correction_sum + ${sign_loss[$i]} * ${inputs[$i]}")
 		done;
-		w=$(echo "scale=8; $w + $lr * $loss" | bc)
-		echo "epoch: $epoch; predictions=${predictions[@]}; loss=${loss[@]}"
+		local loss_avg=$(calc "$loss_sum / ${#inputs[@]}");
+		w=$(calc "$w + $lr * $lr_correction_sum");
+		b=$(calc "$b + $lr * $sign_loss_sum / ${#inputs[@]}");
+		if [ "$(calc "$w == $w_pp")" == "1" -a "$(calc "$b == $b_pp")" == "1" ]; then  # we are in a train lock
+			lr=$(calc "$lr / 2"); # learn slower
+		else
+			echo "not equal: w: $w; w_pp: $w_pp; b=$b; b_p: $b_pp";
+		fi;
+		w_pp="$w_p";
+		b_pp="$b_p";
+		w_p="$w"; # previous weight;
+		b_p="$b"; # previous bias;
+		echo "epoch: $epoch; learning rate=$lr; loss=${loss_avg}; bias=$b; weight=$w; predictions=${predictions[@]};"
+		[ "$(calc "$lr == 0")" == 1 ] && break;
 	done;
 }
+
 predict 10 $w $b
-train >/dev/null;
+train;
 predict 10 $w $b
 exit
-activation(){
-	[ $1 -gt 0 ];
-}
-
-predict(){
-	v=$1;
-	w=$2;
-	echo $(( v * w ));
-}
-
-perceptron(){
-	local inputs;
-	local weights;
-	touch weights.csv
-	exec 3<weights.csv
-	while read inputs;
-	do
-		# step 1: calculate the dot product of the inputs over the weights
-		read weights <&3;
-		inputs_count=$(echo $inputs | tr , '\n' | wc -l);
-		inputs_count=$((inputs_count-2)); # ignore the last 2 columns as they are point type and color
-		inp_type=$(echo $input | cut -d, -f3)
-		sum=0;
-		for (( i=1; i<=inputs_count; i++ )); # cut fields starts with 1
-		do
-			inp=$(echo $inputs | cut -d, -f$i)
-			w=$(echo $weights | cut -d, -f$i)
-			p=$(predict $inp $w);
-			w=${w:=1};
-			n="0.2"; #learning rate
-			d=1; #type classification value;
-			[ "$inp_type" == "25" ] && d=-1;
-			w=$(echo "scale=8; $w + $n * $d * $inp " | bc);
-			echo -n $w,
-			sum=$(echo "scale=8; $sum + $w" | bc);
-		done;
-		echo $(echo $inputs | tr , "\n" | sed -e "/^$/d" | tail -2 | tr "\n" ,);
-	done;
-}
 
 plot(){
 	gnuplot -persist <<EOF
@@ -97,21 +93,6 @@ plot '$1.csv' using 1:2:3:4 with points pt variable ps 1 lc variable title "[$1]
 EOF
 }
 
-generate_data(){
-	local data_file=$1;
-	echo -n > inputs.csv;
-	echo -n > outputs.csv;
-	for (( i=1; i<6; i++ )){
-		tp=22; #$(( RANDOM % 2 ? 22 : 25))
-		c=100;
-		#[ $tp == 22 ] && c=150;
-		#echo "$(( RANDOM % 256 - 127 )),$(( RANDOM % 256 - 127)),$tp,$c" >> $data_file;
-		echo $i,$i,$tp,$c >> inputs.csv;
-		echo $i,$(( i * 3 )),$tp,$c >> outputs.csv;
-	}
-}
-
-generate_data;
 plot inputs
 cat inputs.csv | perceptron > func.csv
 plot weights
