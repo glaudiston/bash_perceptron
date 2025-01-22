@@ -78,8 +78,8 @@ plot(){
 set terminal png
 set xzeroaxis
 set yzeroaxis
-set yrange [-2:50]
-set xrange [-2:50]
+set yrange [-2:100]
+set xrange [-2:20]
 set border 0          # remove frame
 set xtics axis        # place tics on axis rather than on border
 set ytics axis
