@@ -32,6 +32,7 @@ train(){
 	b_p=0;
 	b_pp=0;
 	for epoch in $(seq $epochs); do
+		echo -n "" > predictions.csv;
 		declare -a predictions=( );
 		declare -a loss=( );
 		declare -a sign_loss=( );
@@ -40,6 +41,7 @@ train(){
 		local sign_loss_sum=0;
 		for (( i=0; i<${#inputs[@]}; i++)); do
 			predictions[$i]=$(predict "${inputs[$i]}" "$w" "$b");
+			echo "$((i+1)),${predictions[$i]},27,200" >> predictions.csv
 			loss[$i]=$(calc "${outputs[$i]} - ${predictions[$i]}");
 			sign_loss[$i]=$( [ "$(calc "${loss[$i]} < 0")" == "1" ] && echo -1 || echo 1 );
 			sign_loss_sum=$(calc "$sign_loss_sum + ${sign_loss[$i]}");
@@ -50,30 +52,34 @@ train(){
 		w=$(calc "$w + $lr * $lr_correction_sum");
 		b=$(calc "$b + $lr * $sign_loss_sum / ${#inputs[@]}");
 		if [ "$(calc "$w == $w_pp")" == "1" -a "$(calc "$b == $b_pp")" == "1" ]; then  # we are in a train lock
+			echo "training lock detected; reducing the training rate" >&2
 			lr=$(calc "$lr / 2"); # learn slower
-		else
-			echo "not equal: w: $w; w_pp: $w_pp; b=$b; b_p: $b_pp";
 		fi;
 		w_pp="$w_p";
 		b_pp="$b_p";
 		w_p="$w"; # previous weight;
 		b_p="$b"; # previous bias;
-		echo "epoch: $epoch; learning rate=$lr; loss=${loss_avg}; bias=$b; weight=$w; predictions=${predictions[@]};"
+		echo "epoch: $epoch; learning rate=$lr; loss=${loss_avg}; bias=$b; weight=$w;"
+		# echo "predictions=${predictions[@]}";
+		plot $epoch $w $b
 		[ "$(calc "$lr == 0")" == 1 ] && break;
 	done;
 }
 
-predict 10 $w $b
-train;
-predict 10 $w $b
-exit
-
 plot(){
+	echo -n "" > inputs.csv
+	echo -n "" > outputs.csv
+	touch predictions.csv
+	for (( i=0; i<${#inputs[@]}; i++)); do
+		echo "$((i+1)),${inputs[$i]},22,100" >> inputs.csv
+		echo "$((i+1)),${outputs[$i]},25,150" >> outputs.csv
+	done;
 	gnuplot -persist <<EOF
 set terminal png
-set output "$1.png"
 set xzeroaxis
 set yzeroaxis
+set yrange [-2:50]
+set xrange [-2:50]
 set border 0          # remove frame
 set xtics axis        # place tics on axis rather than on border
 set ytics axis
@@ -89,12 +95,23 @@ set arrow 2 from 0,0 to first 0, graph 1 filled head
 set arrow 3 from 0,0 to graph 0, first 0 filled head
 set arrow 4 from 0,0 to first 0, graph 0 filled head
 set datafile separator ","
-plot '$1.csv' using 1:2:3:4 with points pt variable ps 1 lc variable title "[$1]"
+set output "plot_$1.png"
+f(x)=x * 3 + 20
+w(x)=x * $2 + $3
+plot \
+'inputs.csv' using 1:2:3:4 with points pt variable ps 1 lc variable title "", \
+'outputs.csv' using 1:2:3:4 with points pt variable ps 1 lc variable title "", \
+'predictions.csv' using 1:2:3:4 with points pt variable ps 1 lc variable title "epoch $1", \
+f(x) title "real f(x) = x * 3 + 20", \
+w(x) title "trained w(x) = x * $2 + $3
 EOF
 }
 
-plot inputs
-cat inputs.csv | perceptron > func.csv
-plot weights
-magick -delay 40 inputs.png weights*.png output.gif
+plot 0 0 0
+predict 10 $w $b
+train;
+predict 10 $w $b
+echo ploting animated gif...
+magick -delay 1 $(ls -tr -1 plot_*.png) output.gif
+rm plot_*.png {inputs,outputs,predictions}.csv
 display output.gif
